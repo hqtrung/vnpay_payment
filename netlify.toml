@@ -1,0 +1,33 @@
+[build]
+  functions = "netlify/functions"
+
+[functions]
+  directory = "netlify/functions"
+
+# Generate QR endpoint
+[[redirects]]
+  from = "/api/generate-qr"
+  to = "/.netlify/functions/generate-qr"
+  status = 200
+  force = true
+
+# Check Transaction endpoint
+[[redirects]]
+  from = "/api/check-transaction"
+  to = "/.netlify/functions/check-transaction"
+  status = 200
+  force = true
+
+# Webhook endpoint
+[[redirects]]
+  from = "/api/webhook"
+  to = "/.netlify/functions/webhook"
+  status = 200
+  force = true
+
+# History endpoint
+[[redirects]]
+  from = "/api/webhook/history"
+  to = "/.netlify/functions/webhook"
+  status = 200
+  force = true

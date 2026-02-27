@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VNPAY QR Code Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .container-qrcode {
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-image: url('https://vnpay.vn/images/qr-viet-qr-bg.png') !important;
+            background-color: #f5f5f5;
+            border-radius: 10px;
+            min-height: 350px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10%;
+        }
+        .pd-10-percent { padding: 10%; }
+        .text-center { text-align: center; }
+        #qrcode { display: inline-block; }
+        #qrcode img { border: 5px solid white; border-radius: 8px; }
+        .payment-info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e3f2fd;
+            border-radius: 8px;
+        }
+        .btn {
+            background: #005AAB;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        .btn:hover { background: #004a8f; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        input {
+            padding: 10px;
+            font-size: 16px;
+            width: 200px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        .loading { display: none; margin: 10px 0; }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #005AAB;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .debug {
+            margin-top: 20px;
+            text-align: left;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+        }
+        .debug.show { display: block; }
+    </style>
+</head>
+<body>
+    <h1>VNPAY QR Code Test</h1>
+
+    <div>
+        <label>So tien (VND): </label>
+        <input type="number" id="amount" value="10000" min="1000">
+    </div>
+
+    <div>
+        <label>Mo ta: </label>
+        <input type="text" id="description" placeholder="Noi dung thanh toan">
+    </div>
+
+    <br>
+
+    <button class="btn" id="generateBtn" onclick="generateQR()">Tao QR</button>
+
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>Dang tao QR Code...</p>
+    </div>
+
+    <div id="result"></div>
+
+    <br>
+
+    <div class="container-qrcode pd-10-percent text-center">
+        <div id="qrcode"></div>
+    </div>
+
+    <div class="payment-info">
+        <h3>Thong tin thanh toan</h3>
+        <p><strong>Merchant:</strong> PATEDEL</p>
+        <p><strong>Terminal:</strong> PATEDET2</p>
+        <p id="order-info"></p>
+        <p id="amount-display"></p>
+    </div>
+
+    <!-- Check Transaction Section -->
+    <div class="payment-info" style="margin-top: 20px;">
+        <h3>Kiem tra giao dich</h3>
+        <input type="text" id="checkOrderId" placeholder="Ma don hang">
+        <button class="btn" onclick="checkTransaction()">Kiem tra</button>
+        <div id="checkResult"></div>
+    </div>
+
+    <div class="debug" id="debugInfo"></div>
+
+    <script>
+        // API Base URL - Update this to your Netlify deployment
+        const API_BASE = 'https://vnpay-webhook.finizi.ai/api';
+
+        let currentOrderId = '';
+
+        async function generateQR() {
+            const amount = document.getElementById('amount').value;
+            const description = document.getElementById('description').value;
+
+            if (!amount || amount < 1000) {
+                showError('So tien toi thieu la 1,000 VND');
+                return;
+            }
+
+            // Show loading
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('result').innerHTML = '';
+            document.getElementById('debugInfo').classList.remove('show');
+
+            try {
+                const response = await fetch(API_BASE + '/generate-qr', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        amount: parseInt(amount),
+                        description: description || 'Test Payment'
+                    })
+                });
+
+                const result = await response.json();
+
+                // Show debug info
+                document.getElementById('debugInfo').innerHTML = '<strong>API Response:</strong><pre>' + JSON.stringify(result, null, 2) + '</pre>';
+                document.getElementById('debugInfo').classList.add('show');
+
+                if (result.code === '00') {
+                    // Clear previous QR
+                    document.getElementById('qrcode').innerHTML = '';
+
+                    // Generate QR Code
+                    new QRCode(document.getElementById('qrcode'), {
+                        text: result.data,
+                        width: 200,
+                        height: 200,
+                        colorDark: '#000000',
+                        colorLight: '#ffffff',
+                        correctLevel: QRCode.CorrectLevel.M
+                    });
+
+                    // Update display
+                    currentOrderId = result.orderId;
+                    document.getElementById('order-info').innerHTML = '<strong>Order ID:</strong> ' + result.orderId;
+                    document.getElementById('amount-display').innerHTML = '<strong>So tien:</strong> ' + parseInt(amount).toLocaleString('vi-VN') + ' VND';
+
+                    document.getElementById('result').innerHTML = '<p class="success">QR Code da duoc tao! Quet ma bang app VNPAY de thanh toan.</p>';
+
+                    // Auto-fill check order ID
+                    document.getElementById('checkOrderId').value = result.orderId;
+                } else {
+                    showError(result.message || 'Loi khi tao QR Code');
+                }
+            } catch (err) {
+                showError('Loi ket noi: ' + err.message);
+            } finally {
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        async function checkTransaction() {
+            const txnId = document.getElementById('checkOrderId').value;
+
+            if (!txnId) {
+                document.getElementById('checkResult').innerHTML = '<p class="error">Vui long nhap ma don hang</p>';
+                return;
+            }
+
+            try {
+                const response = await fetch(API_BASE + '/check-transaction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ txnId: txnId })
+                });
+
+                const result = await response.json();
+
+                if (result.code === '00') {
+                    document.getElementById('checkResult').innerHTML = `
+                        <p class="success">Giao dich da thanh toan!</p>
+                        <p><strong>Ma don:</strong> ${result.billNumber}</p>
+                        <p><strong>So tien:</strong> ${parseInt(result.realAmount).toLocaleString('vi-VN')} VND</p>
+                        <p><strong>Ngan hang:</strong> ${result.bankCode}</p>
+                        <p><strong>Ngay:</strong> ${result.payDate}</p>
+                    `;
+                } else {
+                    document.getElementById('checkResult').innerHTML = '<p class="error">' + (result.message || 'Khong tim thay giao dich') + '</p>';
+                }
+            } catch (err) {
+                document.getElementById('checkResult').innerHTML = '<p class="error">Loi: ' + err.message + '</p>';
+            }
+        }
+
+        function showError(msg) {
+            document.getElementById('result').innerHTML = '<p class="error">' + msg + '</p>';
+        }
+
+        // Enter key handlers
+        document.getElementById('amount').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') generateQR();
+        });
+        document.getElementById('description').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') generateQR();
+        });
+        document.getElementById('checkOrderId').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') checkTransaction();
+        });
+    </script>
+</body>
+</html>

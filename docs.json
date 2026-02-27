@@ -1,0 +1,34 @@
+{
+  "theme": "mint",
+  "name": "VNPAY Payment",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#005AAB",
+    "light": "#005AAB",
+    "dark": "#005AAB"
+  },
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": ["introduction"]
+    },
+    {
+      "group": "API Reference",
+      "pages": ["vnpay-qr-mms-api", "vnpay-webhook"]
+    },
+    {
+      "group": "Integration",
+      "pages": ["vnpay-test-info"]
+    }
+  ],
+  "api": {
+    "baseUrl": "https://vnpay-webhook.finizi.ai/api"
+  },
+  "footerSocials": {
+    "github": "https://github.com/hqtrung/vnpay_payment"
+  }
+}

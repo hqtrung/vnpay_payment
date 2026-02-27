@@ -1,0 +1,17 @@
+{
+  "name": "vnpay-payment-webhook",
+  "version": "1.0.0",
+  "description": "VNPAY QR Payment Webhook for Netlify",
+  "main": "netlify/functions/webhook.js",
+  "scripts": {
+    "start": "netlify dev",
+    "dev": "netlify dev"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.0.0"
+  }
+}
