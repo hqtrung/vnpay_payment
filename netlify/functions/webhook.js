@@ -220,8 +220,9 @@ exports.handler = async function(event, context) {
       };
     }
 
-    // Verify merchant code matches
-    if (config.merchantCode && payload.merchantCode !== config.merchantCode) {
+    // Verify merchant code matches (skip in test mode)
+    const testMode = process.env.WEBHOOK_TEST_MODE === 'true';
+    if (!testMode && config.merchantCode && payload.merchantCode !== config.merchantCode) {
       return {
         statusCode: 400,
         headers: { 'Content-Type': 'application/json' },
