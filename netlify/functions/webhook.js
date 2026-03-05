@@ -86,6 +86,7 @@ async function addToHistory(callbackData, validated = true) {
   };
 
   callbackHistory.unshift(entry);
+  console.log('[WEBHOOK] Added to history:', entry.txnId, 'validated:', validated, 'total entries:', callbackHistory.length);
 
   // FIFO: Remove oldest entries if exceeding limit
   while (callbackHistory.length > config.maxHistorySize) {
@@ -95,27 +96,11 @@ async function addToHistory(callbackData, validated = true) {
   // Persist to Netlify Blobs (fire and forget)
   try {
     await getCallbackStore().setJSON(entry.id, entry);
-    // Rebuild blobs from memory to keep in sync
-    await syncToBlobs();
   } catch (err) {
-    console.error('Failed to persist to blobs:', err.message);
+    console.error('[WEBHOOK] Failed to persist to blobs:', err.message);
   }
 
   return entry;
-}
-
-/**
- * Sync in-memory cache to Netlify Blobs
- */
-async function syncToBlobs() {
-  try {
-    // Clear existing blobs and rewrite
-    for (const entry of callbackHistory) {
-      await getCallbackStore().setJSON(entry.id, entry);
-    }
-  } catch (err) {
-    console.error('Sync to blobs failed:', err.message);
-  }
 }
 
 /**
