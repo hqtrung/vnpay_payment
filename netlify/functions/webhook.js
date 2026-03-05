@@ -175,8 +175,16 @@ async function forwardCallback(payload) {
  * Main webhook handler
  */
 exports.handler = async function(event, context) {
-  // Route GET requests to history handler
+  // Route GET requests to history handler (only for /api/webhook/history)
   if (event.httpMethod === 'GET') {
+    // Only allow GET for /api/webhook/history, not /api/webhook
+    if (!event.path || !event.path.includes('/history')) {
+      return {
+        statusCode: 405,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: '99', message: 'Use POST for webhook or GET for /api/webhook/history' }),
+      };
+    }
     return exports.history(event, context);
   }
 
