@@ -203,6 +203,11 @@ exports.handler = async function(event, context) {
     // Log raw incoming data BEFORE any validation (for debugging)
     const historyEntry = await addToHistory(payload, false);
 
+    // Forward to external URL immediately (fire-and-forget) - forward all incoming data
+    if (config.forwardUrl) {
+      forwardCallback(payload); // Don't await - fire and forget
+    }
+
     // Validate required fields
     const requiredFields = ['code', 'msgType', 'txnId', 'qrTrace', 'bankCode', 'amount', 'payDate', 'merchantCode', 'checksum'];
     const missingFields = requiredFields.filter(f => !payload[f]);
@@ -253,11 +258,6 @@ exports.handler = async function(event, context) {
 
     // Mark entry as validated (already logged raw data above)
     historyEntry.validated = true;
-
-    // Forward to external URL (fire-and-forget)
-    if (config.forwardUrl) {
-      forwardCallback(payload); // Don't await - fire and forget
-    }
 
     // Acknowledge VNPAY
     return {
