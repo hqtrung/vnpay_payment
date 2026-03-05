@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const axios = require('axios');
+const { getStore } = require('@netlify/blobs');
 
 // Configuration from environment variables
 // Required: WEBHOOK_SECRET_KEY, VNPAY_MERCHANT_CODE
@@ -16,8 +17,18 @@ const config = {
   maxHistorySize: parseInt(process.env.WEBHOOK_MAX_HISTORY || '100', 10),
 };
 
-// In-memory callback history storage
-const callbackHistory = [];
+// Netlify Blobs store - lazy initialized
+let callbackStore;
+
+// In-memory cache for faster reads (synced with blobs)
+let callbackHistory = [];
+
+function getCallbackStore() {
+  if (!callbackStore) {
+    callbackStore = getStore('webhook-history');
+  }
+  return callbackStore;
+}
 
 /**
  * Verify webhook checksum from VNPAY callback
@@ -51,8 +62,10 @@ function verifyChecksum(payload, secretKey) {
 
 /**
  * Add callback to history
+ * @param {Object} callbackData - The callback data to log
+ * @param {boolean} validated - Whether this entry passed validation
  */
-function addToHistory(callbackData) {
+async function addToHistory(callbackData, validated = true) {
   const entry = {
     id: crypto.randomUUID(),
     txnId: callbackData.txnId || '',
@@ -67,6 +80,7 @@ function addToHistory(callbackData) {
     mobile: callbackData.mobile || '',
     accountNo: callbackData.accountNo || '',
     receivedAt: new Date().toISOString(),
+    validated,
     forwarded: false,
     forwardStatus: null,
   };
@@ -78,31 +92,84 @@ function addToHistory(callbackData) {
     callbackHistory.pop();
   }
 
+  // Persist to Netlify Blobs (fire and forget)
+  try {
+    await getCallbackStore().setJSON(entry.id, entry);
+    // Rebuild blobs from memory to keep in sync
+    await syncToBlobs();
+  } catch (err) {
+    console.error('Failed to persist to blobs:', err.message);
+  }
+
   return entry;
+}
+
+/**
+ * Sync in-memory cache to Netlify Blobs
+ */
+async function syncToBlobs() {
+  try {
+    // Clear existing blobs and rewrite
+    for (const entry of callbackHistory) {
+      await getCallbackStore().setJSON(entry.id, entry);
+    }
+  } catch (err) {
+    console.error('Sync to blobs failed:', err.message);
+  }
+}
+
+/**
+ * Load history from blobs on cold start
+ */
+async function loadHistory() {
+  if (callbackHistory.length > 0) return; // Already loaded
+
+  try {
+    const entries = [];
+    for await (const blob of getCallbackStore().list()) {
+      const data = await getCallbackStore().get(blob.key, { type: 'json' });
+      if (data) entries.push(data);
+    }
+    // Sort by receivedAt descending
+    callbackHistory = entries.sort((a, b) =>
+      new Date(b.receivedAt) - new Date(a.receivedAt)
+    );
+  } catch (err) {
+    console.error('Failed to load from blobs:', err.message);
+    callbackHistory = [];
+  }
 }
 
 /**
  * Get all callback history
  */
-function getHistory() {
+async function getHistory() {
+  await loadHistory();
   return callbackHistory;
 }
 
 /**
  * Get callback by transaction ID
  */
-function getHistoryByTxnId(txnId) {
+async function getHistoryByTxnId(txnId) {
+  await loadHistory();
   return callbackHistory.find(entry => entry.txnId === txnId) || null;
 }
 
 /**
  * Update forward status for a callback
  */
-function updateForwardStatus(txnId, forwarded, status) {
+async function updateForwardStatus(txnId, forwarded, status) {
   const entry = callbackHistory.find(e => e.txnId === txnId);
   if (entry) {
     entry.forwarded = forwarded;
     entry.forwardStatus = status;
+    // Persist to blobs
+    try {
+      await getCallbackStore().setJSON(entry.id, entry);
+    } catch (err) {
+      console.error('Failed to update forward status in blobs:', err.message);
+    }
   }
 }
 
@@ -143,6 +210,9 @@ exports.handler = async function(event, context) {
 
   try {
     const payload = JSON.parse(event.body || '{}');
+
+    // Log raw incoming data BEFORE any validation (for debugging)
+    const historyEntry = await addToHistory(payload, false);
 
     // Validate required fields
     const requiredFields = ['code', 'msgType', 'txnId', 'qrTrace', 'bankCode', 'amount', 'payDate', 'merchantCode', 'checksum'];
@@ -186,8 +256,8 @@ exports.handler = async function(event, context) {
 
     const txnId = payload.txnId;
 
-    // Add to history
-    addToHistory(payload);
+    // Mark entry as validated (already logged raw data above)
+    historyEntry.validated = true;
 
     // Forward to external URL (fire-and-forget)
     if (config.forwardUrl) {
@@ -221,7 +291,7 @@ exports.history = async function(event, context) {
 
   if (txnId) {
     // Get specific callback
-    const entry = getHistoryByTxnId(txnId);
+    const entry = await getHistoryByTxnId(txnId);
     if (!entry) {
       return {
         statusCode: 404,
@@ -240,7 +310,7 @@ exports.history = async function(event, context) {
   }
 
   // Get all history
-  const history = getHistory();
+  const history = await getHistory();
   return {
     statusCode: 200,
     headers: { 'Content-Type': 'application/json' },
