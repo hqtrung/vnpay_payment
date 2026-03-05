@@ -214,7 +214,13 @@ exports.handler = async function(event, context) {
       return {
         statusCode: 400,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: '08', message: 'Invalid merchant code' }),
+        body: JSON.stringify({
+          code: '08',
+          message: 'Invalid merchant code',
+          // Return raw entry for debugging
+          rawEntry: historyEntry,
+          historyCount: callbackHistory.length
+        }),
       };
     }
 
