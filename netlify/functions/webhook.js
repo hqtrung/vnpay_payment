@@ -5,7 +5,7 @@
 
 const crypto = require('crypto');
 const axios = require('axios');
-const { getStore } = require('@netlify/blobs');
+// const { getStore } = require('@netlify/blobs'); // Uncomment for persistent storage
 
 // Configuration from environment variables
 // Required: WEBHOOK_SECRET_KEY, VNPAY_MERCHANT_CODE
@@ -17,18 +17,19 @@ const config = {
   maxHistorySize: parseInt(process.env.WEBHOOK_MAX_HISTORY || '100', 10),
 };
 
-// Netlify Blobs store - lazy initialized
-let callbackStore;
-
-// In-memory cache for faster reads (synced with blobs)
+// In-memory history storage (per-function-instance)
+// Note: On Netlify, each invocation may use a different instance
 let callbackHistory = [];
 
-function getCallbackStore() {
-  if (!callbackStore) {
-    callbackStore = getStore('webhook-history');
-  }
-  return callbackStore;
-}
+// Netlify Blobs store - lazy initialized (for persistent storage)
+// let callbackStore;
+
+// function getCallbackStore() {
+//   if (!callbackStore) {
+//     callbackStore = getStore('webhook-history');
+//   }
+//   return callbackStore;
+// }
 
 /**
  * Verify webhook checksum from VNPAY callback
@@ -93,36 +94,33 @@ async function addToHistory(callbackData, validated = true) {
     callbackHistory.pop();
   }
 
-  // Persist to Netlify Blobs (fire and forget)
-  try {
-    await getCallbackStore().setJSON(entry.id, entry);
-  } catch (err) {
-    console.error('[WEBHOOK] Failed to persist to blobs:', err.message);
-  }
+  // Persist to Netlify Blobs (fire and forget) - disabled for testing
+  // try {
+  //   await getCallbackStore().setJSON(entry.id, entry);
+  // } catch (err) {
+  //   console.error('[WEBHOOK] Failed to persist to blobs:', err.message);
+  // }
 
   return entry;
 }
 
 /**
- * Load history from blobs on cold start
+ * Load history (in-memory only for now)
  */
 async function loadHistory() {
   if (callbackHistory.length > 0) return; // Already loaded
 
-  try {
-    const entries = [];
-    for await (const blob of getCallbackStore().list()) {
-      const data = await getCallbackStore().get(blob.key, { type: 'json' });
-      if (data) entries.push(data);
-    }
-    // Sort by receivedAt descending
-    callbackHistory = entries.sort((a, b) =>
-      new Date(b.receivedAt) - new Date(a.receivedAt)
-    );
-  } catch (err) {
-    console.error('Failed to load from blobs:', err.message);
-    callbackHistory = [];
-  }
+  // TODO: Load from Netlify Blobs if persistent storage is needed
+  // try {
+  //   const entries = [];
+  //   for await (const blob of getCallbackStore().list()) {
+  //     const data = await getCallbackStore().get(blob.key, { type: 'json' });
+  //     if (data) entries.push(data);
+  //   }
+  //   callbackHistory = entries.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt));
+  // } catch (err) {
+  //   console.error('Failed to load from blobs:', err.message);
+  // }
 }
 
 /**
@@ -149,12 +147,12 @@ async function updateForwardStatus(txnId, forwarded, status) {
   if (entry) {
     entry.forwarded = forwarded;
     entry.forwardStatus = status;
-    // Persist to blobs
-    try {
-      await getCallbackStore().setJSON(entry.id, entry);
-    } catch (err) {
-      console.error('Failed to update forward status in blobs:', err.message);
-    }
+    // Persist to blobs (disabled)
+    // try {
+    //   await getCallbackStore().setJSON(entry.id, entry);
+    // } catch (err) {
+    //   console.error('Failed to update forward status in blobs:', err.message);
+    // }
   }
 }
 
