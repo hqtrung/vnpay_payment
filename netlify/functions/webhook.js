@@ -1,173 +1,46 @@
 /**
  * VNPAY Webhook Handler
- * Netlify Function for receiving payment callbacks
+ * Receives payment callbacks and forwards to ERP
  */
 
 const crypto = require('crypto');
 const axios = require('axios');
 const { getStore } = require('@netlify/blobs');
 
-// Configuration from environment variables
-// Required: WEBHOOK_SECRET_KEY, VNPAY_MERCHANT_CODE
-const config = {
-  secretKey: process.env.WEBHOOK_SECRET_KEY,
-  forwardUrl: process.env.WEBHOOK_FORWARD_URL || '',
-  merchantCode: process.env.VNPAY_MERCHANT_CODE,
-  terminalId: process.env.VNPAY_TERMINAL_ID || '',
-  maxHistorySize: parseInt(process.env.WEBHOOK_MAX_HISTORY || '100', 10),
-};
+// Blob store
+let blobStore;
+function getBlobStore() {
+  if (!blobStore) {
+    // Netlify functions automatically have NETLIFY_SITE_ID env var
+    const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+    blobStore = getStore({
+      name: 'webhook-history',
+      siteID: siteID,
+    });
+    console.log('[WEBHOOK] Blob store initialized, siteID:', siteID);
+  }
+  return blobStore;
+}
 
-// Netlify Blobs store - lazy initialized
-let callbackStore;
-
-// In-memory cache for faster reads (synced with blobs)
+// In-memory cache
 let callbackHistory = [];
 
-function getCallbackStore() {
-  if (!callbackStore) {
-    callbackStore = getStore('webhook-history');
-  }
-  return callbackStore;
-}
-
 /**
- * Verify webhook checksum from VNPAY callback
- * Formula: MD5(code|msgType|txnId|qrTrace|bankCode|mobile|accountNo|amount|payDate|merchantCode|secretKey)
- */
-function verifyChecksum(payload, secretKey) {
-  const receivedChecksum = (payload.checksum || '').toUpperCase();
-
-  const checksumData = [
-    payload.code || '',
-    payload.msgType || '',
-    payload.txnId || '',
-    payload.qrTrace || '',
-    payload.bankCode || '',
-    payload.mobile || '',
-    payload.accountNo || '',
-    payload.amount || '',
-    payload.payDate || '',
-    payload.merchantCode || '',
-    secretKey
-  ].join('|');
-
-  const expectedChecksum = crypto
-    .createHash('md5')
-    .update(checksumData)
-    .digest('hex')
-    .toUpperCase();
-
-  return receivedChecksum === expectedChecksum;
-}
-
-/**
- * Add callback to history
- * @param {Object} callbackData - The callback data to log
- * @param {boolean} validated - Whether this entry passed validation
- */
-async function addToHistory(callbackData, validated = true) {
-  const entry = {
-    id: crypto.randomUUID(),
-    txnId: callbackData.txnId || '',
-    qrTrace: callbackData.qrTrace || '',
-    code: callbackData.code || '',
-    message: callbackData.message || '',
-    amount: callbackData.amount || '',
-    bankCode: callbackData.bankCode || '',
-    payDate: callbackData.payDate || '',
-    merchantCode: callbackData.merchantCode || '',
-    terminalId: callbackData.terminalId || '',
-    mobile: callbackData.mobile || '',
-    accountNo: callbackData.accountNo || '',
-    receivedAt: new Date().toISOString(),
-    validated,
-    forwarded: false,
-    forwardStatus: null,
-  };
-
-  callbackHistory.unshift(entry);
-  console.log('[WEBHOOK] Added to history:', entry.txnId, 'validated:', validated, 'total entries:', callbackHistory.length);
-
-  // FIFO: Remove oldest entries if exceeding limit
-  while (callbackHistory.length > config.maxHistorySize) {
-    callbackHistory.pop();
-  }
-
-  // Persist to Netlify Blobs
-  try {
-    await getCallbackStore().setJSON(entry.id, entry);
-  } catch (err) {
-    console.error('[WEBHOOK] Failed to persist to blobs:', err.message);
-  }
-
-  return entry;
-}
-
-/**
- * Load history from blobs on cold start
+ * Load history from blobs
  */
 async function loadHistory() {
   if (callbackHistory.length > 0) return;
 
   try {
+    const store = getBlobStore();
     const entries = [];
-    for await (const blob of getCallbackStore().list()) {
-      const data = await getCallbackStore().get(blob.key, { type: 'json' });
+    for await (const blob of store.list()) {
+      const data = await store.get(blob.key, { type: 'json' });
       if (data) entries.push(data);
     }
     callbackHistory = entries.sort((a, b) => new Date(b.receivedAt) - new Date(a.receivedAt));
   } catch (err) {
-    console.error('[WEBHOOK] Failed to load from blobs:', err.message);
-  }
-}
-
-/**
- * Get all callback history
- */
-async function getHistory() {
-  await loadHistory();
-  return callbackHistory;
-}
-
-/**
- * Get callback by transaction ID
- */
-async function getHistoryByTxnId(txnId) {
-  await loadHistory();
-  return callbackHistory.find(entry => entry.txnId === txnId) || null;
-}
-
-/**
- * Update forward status for a callback
- */
-async function updateForwardStatus(txnId, forwarded, status) {
-  const entry = callbackHistory.find(e => e.txnId === txnId);
-  if (entry) {
-    entry.forwarded = forwarded;
-    entry.forwardStatus = status;
-    // Persist to blobs
-    try {
-      await getCallbackStore().setJSON(entry.id, entry);
-    } catch (err) {
-      console.error('[WEBHOOK] Failed to update forward status in blobs:', err.message);
-    }
-  }
-}
-
-/**
- * Forward callback to external URL
- */
-async function forwardCallback(payload) {
-  if (!config.forwardUrl) return;
-
-  try {
-    const response = await axios.post(config.forwardUrl, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000,
-    });
-    updateForwardStatus(payload.txnId, true, response.status);
-  } catch (error) {
-    updateForwardStatus(payload.txnId, false, error.response?.status || null);
+    console.log('[WEBHOOK] Load from blobs failed:', err.message);
   }
 }
 
@@ -175,9 +48,8 @@ async function forwardCallback(payload) {
  * Main webhook handler
  */
 exports.handler = async function(event, context) {
-  // Route GET requests to history handler (only for /api/webhook/history)
+  // Route GET requests to history handler
   if (event.httpMethod === 'GET') {
-    // Only allow GET for /api/webhook/history, not /api/webhook
     if (!event.path || !event.path.includes('/history')) {
       return {
         statusCode: 405,
@@ -188,7 +60,6 @@ exports.handler = async function(event, context) {
     return exports.history(event, context);
   }
 
-  // Only allow POST method for webhook
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
@@ -199,75 +70,52 @@ exports.handler = async function(event, context) {
 
   try {
     const payload = JSON.parse(event.body || '{}');
+    const receivedAt = new Date().toISOString();
 
-    // Log raw incoming data BEFORE any validation (for debugging)
-    const historyEntry = await addToHistory(payload, false);
+    const entry = {
+      id: crypto.randomUUID(),
+      originalPayload: payload,
+      receivedAt,
+      forwarded: false,
+      forwardStatus: null,
+    };
 
-    // Forward to external URL immediately (fire-and-forget) - forward all incoming data
-    if (config.forwardUrl) {
-      forwardCallback(payload); // Don't await - fire and forget
+    callbackHistory.unshift(entry);
+
+    // Persist to blobs
+    try {
+      const store = getBlobStore();
+      await store.setJSON(entry.id, entry);
+    } catch (err) {
+      console.log('[WEBHOOK] Blob write failed:', err.message);
     }
 
-    // Validate required fields
-    const requiredFields = ['code', 'msgType', 'txnId', 'qrTrace', 'bankCode', 'amount', 'payDate', 'merchantCode', 'checksum'];
-    const missingFields = requiredFields.filter(f => !payload[f]);
+    // Forward to ERP - add mock flag
+    const forwardUrl = process.env.WEBHOOK_FORWARD_URL;
+    if (forwardUrl) {
+      // Clone payload and add mock flag
+      const payloadForERP = { ...payload, mock: true };
+      console.log('[WEBHOOK] Forwarding to ERP with mock=true');
 
-    if (missingFields.length > 0) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: '02', message: `Missing required fields: ${missingFields.join(', ')}` }),
-      };
+      try {
+        const response = await axios.post(forwardUrl, payloadForERP, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 10000,
+        });
+        entry.forwarded = true;
+        entry.forwardStatus = response.status;
+      } catch (error) {
+        entry.forwarded = false;
+        entry.forwardStatus = error.response?.status || null;
+      }
     }
 
-    // Verify merchant code matches (skip in test mode)
-    const testMode = process.env.WEBHOOK_TEST_MODE === 'true';
-    if (!testMode && config.merchantCode && payload.merchantCode !== config.merchantCode) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code: '08',
-          message: 'Invalid merchant code',
-          // Return raw entry for debugging
-          rawEntry: historyEntry,
-          historyCount: callbackHistory.length
-        }),
-      };
-    }
-
-    // Verify secret key is configured
-    if (!config.secretKey && process.env.WEBHOOK_TEST_MODE !== 'true') {
-      return {
-        statusCode: 500,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: '99', message: 'WEBHOOK_SECRET_KEY not configured' }),
-      };
-    }
-
-    // Verify checksum (allow bypass in test mode)
-    const testMode = process.env.WEBHOOK_TEST_MODE === 'true';
-    if (!testMode && !verifyChecksum(payload, config.secretKey)) {
-      return {
-        statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: '01', message: 'Invalid checksum' }),
-      };
-    }
-
-    const txnId = payload.txnId;
-
-    // Mark entry as validated (already logged raw data above)
-    historyEntry.validated = true;
-
-    // Acknowledge VNPAY
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         code: '00',
         message: 'acknowledged',
-        data: { txnId },
       }),
     };
   } catch (error) {
@@ -283,11 +131,12 @@ exports.handler = async function(event, context) {
  * History endpoint handler
  */
 exports.history = async function(event, context) {
+  await loadHistory();
+
   const txnId = event.queryStringParameters?.txnId;
 
   if (txnId) {
-    // Get specific callback
-    const entry = await getHistoryByTxnId(txnId);
+    const entry = callbackHistory.find(e => e.originalPayload?.txnId === txnId);
     if (!entry) {
       return {
         statusCode: 404,
@@ -305,15 +154,13 @@ exports.history = async function(event, context) {
     };
   }
 
-  // Get all history
-  const history = await getHistory();
   return {
     statusCode: 200,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       code: '00',
-      data: history,
-      total: history.length,
+      data: callbackHistory,
+      total: callbackHistory.length,
     }),
   };
 };
